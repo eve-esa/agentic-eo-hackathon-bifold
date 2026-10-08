@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import logging
+import math
 import os
 import sys
 from typing import Any
@@ -88,25 +88,21 @@ async def geocode_local(
             }
         )
 
-    buf = buffer_km / 111.0
-
     def _parse_result(r: dict) -> dict | None:
         bb = r.get("boundingbox")
-
         if not isinstance(bb, (list, tuple)) or len(bb) != 4:
             return None
-
         try:
             south, north, west, east = map(float, bb)
             lat = float(r.get("lat", 0))
             lon = float(r.get("lon", 0))
-        
         except (TypeError, ValueError, OverflowError):
             return None
-
         if not all(math.isfinite(v) for v in (south, north, west, east, lat, lon)):
             return None
 
+        # A degree of latitude is ~111 km. Longitude shrinks by cos(latitude).
+        # https://en.wikipedia.org/wiki/Longitude#Length_of_a_degree_of_longitude
         d_lat = buffer_km / 111.0
         widest_lat = min(max(abs(south), abs(north)) + d_lat, 89.0)
         d_lon = buffer_km / (111.0 * math.cos(math.radians(widest_lat)))
@@ -126,14 +122,14 @@ async def geocode_local(
             "class": r.get("class", ""),
             "type": r.get("type", ""),
         }
-        
         if east - west > 180:
-            out["warning"] = ("Bounding box spans more than 180 degrees longitude and crosses the antimeridian. BBox is invalid.")
-        
+            out["warning"] = (
+                "Bounding box spans more than 180 degrees longitude and crosses the antimeridian. "
+                "BBox is invalid."
+            )
         return out
 
     parsed = []
-
     for result in results:
         if not isinstance(result, dict):
             continue
@@ -142,17 +138,22 @@ async def geocode_local(
             parsed.append(item)
 
     if not parsed:
-        return json.dumps({
-            "error": "Geocoding returned no usable coordinates.",
-            "place_name": place_name,
-        })
+        return json.dumps(
+            {
+                "error": "Geocoding returned no usable coordinates.",
+                "place_name": place_name,
+            }
+        )
 
-    return json.dumps({
-        "place_name": place_name,
-        "top_result": parsed[0],
-        "all_results": parsed,
-        "total_results": len(parsed),
-    })
+    return json.dumps(
+        {
+            "place_name": place_name,
+            "top_result": parsed[0],
+            "all_results": parsed,
+            "total_results": len(parsed),
+        }
+    )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Geocode MCP server")

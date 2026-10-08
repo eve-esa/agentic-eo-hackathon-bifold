@@ -6,4 +6,3 @@ __pycache__/
 .DS_Store
 .ruff_cache/
 scratch/
-MCP-Handbook.ipynb

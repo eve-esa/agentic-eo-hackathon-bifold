@@ -50,6 +50,40 @@ def eve_mcp_client(name: str) -> Client:
     return Client(transport, timeout=180)
 
 
+def _schema_type(schema: Any) -> str:
+    """A short type label for one JSON Schema node.
+
+    Optional and union parameters are published as ``anyOf`` / ``oneOf`` rather than
+    a top-level ``type``. See JSON Schema combining keywords:
+    https://json-schema.org/understanding-json-schema/reference/combining
+    """
+    if not isinstance(schema, dict):
+        return "unknown"
+    for key in ("anyOf", "oneOf"):
+        options = schema.get(key)
+        if isinstance(options, list) and options:
+            return " | ".join(_schema_type(option) for option in options)
+    type_name = schema.get("type")
+    if isinstance(type_name, list):
+        type_name = " | ".join(str(part) for part in type_name)
+    enum = schema.get("enum")
+    enum_str = ""
+    if isinstance(enum, list) and enum:
+        enum_str = " {" + ", ".join(repr(value) for value in enum) + "}"
+    if type_name == "array":
+        items = schema.get("items")
+        label = f"array[{_schema_type(items)}]" if isinstance(items, dict) else "array"
+        return label + enum_str
+    if isinstance(type_name, str):
+        return type_name + enum_str
+    if enum_str:
+        return enum_str.strip()
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref:
+        return ref.rsplit("/", 1)[-1]
+    return "unknown"
+
+
 def _print_tool(tool, index: int) -> None:
     print(f"\n   [{index}] {tool.name}")
     if tool.description:
@@ -61,11 +95,30 @@ def _print_tool(tool, index: int) -> None:
         props = tool.inputSchema.get("properties", {})
         required = tool.inputSchema.get("required", [])
         for param_name, param_info in props.items():
-            param_type = param_info.get("type", "unknown")
+            param_type = _schema_type(param_info)
             default = param_info.get("default")
             req_marker = "REQUIRED" if param_name in required else "optional"
             default_str = f" (default: {repr(default)})" if default is not None else ""
             print(f"      {param_name}: {param_type} [{req_marker}]{default_str}")
+
+
+def _require_unique_tool_names(tools_by_server: dict[str, list]) -> None:
+    """Raise when two servers publish the same tool name.
+
+    LangChain keeps one tool per name, so the second copy is dropped with no error.
+    """
+    owners: dict[str, list[str]] = {}
+    for server, tools in tools_by_server.items():
+        for tool in tools:
+            owners.setdefault(tool.name, []).append(server)
+    clashes = {name: servers for name, servers in owners.items() if len(servers) > 1}
+    if not clashes:
+        return
+    detail = "; ".join(f"{name} ({', '.join(servers)})" for name, servers in sorted(clashes.items()))
+    raise ValueError(
+        "Two MCP servers expose the same tool name, so one would be dropped: "
+        f"{detail}. Rename one of them."
+    )
 
 
 async def pretty_print_mcp_servers() -> None:
@@ -311,7 +364,11 @@ async def mcp_tools_for_agent(servers: list | None = None):
         connections[key] = connection
     if not connections:
         return []
-    return await MultiServerMCPClient(connections).get_tools()
+    client = MultiServerMCPClient(connections)
+    names = list(connections)
+    batches = await asyncio.gather(*(client.get_tools(server_name=name) for name in names))
+    _require_unique_tool_names(dict(zip(names, batches)))
+    return [tool for batch in batches for tool in batch]
 
 
 async def ask(question: str, *,

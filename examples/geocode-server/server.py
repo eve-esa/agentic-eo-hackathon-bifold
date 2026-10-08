@@ -39,7 +39,7 @@ async def _http_get(
 
 
 @mcp.tool()
-async def geocode_place(
+async def geocode_local(
     place_name: str,
     buffer_km: float = 0.0,
     limit: int = 5,

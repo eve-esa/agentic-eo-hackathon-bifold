@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import logging
 import os
 import sys
@@ -20,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger("geocode-mcp")
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
-NOMINATIM_USER_AGENT = "GeocodeMCPServer"
+NOMINATIM_USER_AGENT = os.getenv("NOMINATIM_USER_AGENT", "geocode-mcp/0.1 (agentic-eo-hackathon)")
 TIMEOUT = 60
 
 _PORT = int(os.getenv("MCP_PORT", "8000"))
@@ -89,41 +90,69 @@ async def geocode_place(
 
     buf = buffer_km / 111.0
 
-    def _parse_result(r: dict) -> dict:
-        bb = r.get("boundingbox", [])
-        south, north, west, east = (
-            float(bb[0]) - buf,
-            float(bb[1]) + buf,
-            float(bb[2]) - buf,
-            float(bb[3]) + buf,
-        )
-        return {
+    def _parse_result(r: dict) -> dict | None:
+        bb = r.get("boundingbox")
+
+        if not isinstance(bb, (list, tuple)) or len(bb) != 4:
+            return None
+
+        try:
+            south, north, west, east = map(float, bb)
+            lat = float(r.get("lat", 0))
+            lon = float(r.get("lon", 0))
+        
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+        if not all(math.isfinite(v) for v in (south, north, west, east, lat, lon)):
+            return None
+
+        d_lat = buffer_km / 111.0
+        widest_lat = min(max(abs(south), abs(north)) + d_lat, 89.0)
+        d_lon = buffer_km / (111.0 * math.cos(math.radians(widest_lat)))
+
+        south = max(south - d_lat, -90.0)
+        north = min(north + d_lat, 90.0)
+        west = max(west - d_lon, -180.0)
+        east = min(east + d_lon, 180.0)
+
+        out = {
             "display_name": r.get("display_name", ""),
             "bbox": f"{west:.4f},{south:.4f},{east:.4f},{north:.4f}",
-            "bbox_array": [
-                round(west, 4),
-                round(south, 4),
-                round(east, 4),
-                round(north, 4),
-            ],
-            "lat": float(r.get("lat", 0)),
-            "lon": float(r.get("lon", 0)),
+            "bbox_array": [round(west, 4), round(south, 4), round(east, 4), round(north, 4)],
+            "lat": lat,
+            "lon": lon,
             "osm_type": r.get("osm_type", ""),
             "class": r.get("class", ""),
             "type": r.get("type", ""),
         }
+        
+        if east - west > 180:
+            out["warning"] = ("Bounding box spans more than 180 degrees longitude and crosses the antimeridian. BBox is invalid.")
+        
+        return out
 
-    parsed = [_parse_result(r) for r in results]
+    parsed = []
 
-    return json.dumps(
-        {
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        item = _parse_result(result)
+        if item is not None:
+            parsed.append(item)
+
+    if not parsed:
+        return json.dumps({
+            "error": "Geocoding returned no usable coordinates.",
             "place_name": place_name,
-            "top_result": parsed[0],
-            "all_results": parsed,
-            "total_results": len(parsed),
-        }
-    )
+        })
 
+    return json.dumps({
+        "place_name": place_name,
+        "top_result": parsed[0],
+        "all_results": parsed,
+        "total_results": len(parsed),
+    })
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Geocode MCP server")

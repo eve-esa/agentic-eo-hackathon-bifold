@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -84,22 +85,152 @@ def _schema_type(schema: Any) -> str:
     return "unknown"
 
 
-def _print_tool(tool, index: int) -> None:
-    print(f"\n   [{index}] {tool.name}")
-    if tool.description:
-        print("   Description:")
-        for line in tool.description.strip().split("\n"):
-            print(f"      {line}")
-    if tool.inputSchema:
-        print("   Input Parameters:")
-        props = tool.inputSchema.get("properties", {})
-        required = tool.inputSchema.get("required", [])
-        for param_name, param_info in props.items():
-            param_type = _schema_type(param_info)
-            default = param_info.get("default")
-            req_marker = "REQUIRED" if param_name in required else "optional"
-            default_str = f" (default: {repr(default)})" if default is not None else ""
-            print(f"      {param_name}: {param_type} [{req_marker}]{default_str}")
+def _tool_params_html(tool) -> str:
+    schema = getattr(tool, "inputSchema", None) or {}
+    props = schema.get("properties") or {}
+    if not isinstance(props, dict) or not props:
+        return ""
+    required = set(schema.get("required") or [])
+    rows = []
+    for name, info in props.items():
+        if not isinstance(info, dict):
+            info = {}
+        marker = "required" if name in required else "optional"
+        default = info.get("default")
+        default_html = ""
+        if default is not None:
+            default_html = (
+                f' <span style="color:#64748b">default {html.escape(repr(default))}</span>'
+            )
+        rows.append(
+            '<div style="font-size:0.78rem;margin:0.15rem 0">'
+            f'<code style="font-size:0.78rem">{html.escape(str(name))}</code> '
+            f'<span style="color:#475569">{html.escape(_schema_type(info))}</span> '
+            f'<span style="color:#94a3b8">{marker}</span>'
+            f"{default_html}</div>"
+        )
+    return (
+        '<div style="margin-top:0.45rem;font-size:0.68rem;letter-spacing:0.06em;'
+        'color:#64748b">ARGUMENTS</div>' + "".join(rows)
+    )
+
+
+# One color per server, then the list repeats. Inline styles only: Jupyter's HTML
+# sanitizer keeps these properties and drops <script> plus live <input>.
+# https://github.com/jupyterlab/jupyterlab/blob/main/packages/apputils/src/sanitizer.ts
+_SERVER_COLORS = (
+    "#0f766e",
+    "#1d4ed8",
+    "#b45309",
+    "#6d28d9",
+    "#be123c",
+    "#047857",
+    "#0369a1",
+    "#c2410c",
+)
+
+
+def _mix_white(hex_color: str, weight: float = 0.16) -> str:
+    """Blend a hex color toward white. ``weight`` is how much of the color remains."""
+    channels = [int(hex_color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)]
+    mixed = [round(channel * weight + 255 * (1 - weight)) for channel in channels]
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
+def _tool_html(tool, color: str) -> str:
+    description = (getattr(tool, "description", None) or "").strip()
+    body = ""
+    if description:
+        body += (
+            '<div style="white-space:pre-wrap;font-size:0.8rem;color:#334155;margin:0.3rem 0 0">'
+            f"{html.escape(description)}</div>"
+        )
+    body += _tool_params_html(tool)
+    return (
+        f'<div style="margin:0.45rem 0;padding:0.55rem 0.7rem;border-radius:10px;'
+        f'border:1px solid {_mix_white(color, 0.42)};background:#ffffff">'
+        f'<div style="font-weight:700;font-size:0.88rem;color:{color}">{html.escape(tool.name)}</div>'
+        f"{body}</div>"
+    )
+
+
+def _server_html(server: dict, batch, color: str) -> str:
+    name = html.escape(str(server.get("name") or ""))
+    description = (server.get("description") or "").strip()
+    tint = _mix_white(color, 0.14)
+    if isinstance(batch, Exception):
+        count = "unavailable"
+        inner = (
+            f'<p style="margin:0.15rem 0 0.35rem;font-size:0.8rem;color:#b45309">{html.escape(str(batch))}</p>'
+        )
+    else:
+        tools = list(batch or [])
+        count = f"{len(tools)} tool" if len(tools) == 1 else f"{len(tools)} tools"
+        inner = ""
+        if description:
+            inner += (
+                f'<p style="margin:0.1rem 0 0.35rem;font-size:0.8rem;color:#475569">'
+                f"{html.escape(description)}</p>"
+            )
+        inner += (
+            f'<div style="font-size:0.68rem;letter-spacing:0.06em;color:{color};'
+            'font-weight:700;margin:0.45rem 0 0.1rem">TOOLS</div>'
+        )
+        inner += "".join(_tool_html(tool, color) for tool in tools)
+        if not tools:
+            inner += '<p style="margin:0.2rem 0 0.35rem;font-size:0.8rem;color:#64748b">No tools.</p>'
+    return (
+        f'<details style="margin:0 0 0.5rem;border:1px solid {color};border-radius:12px;background:#ffffff">'
+        '<summary style="cursor:pointer;padding:0.62rem 0.8rem;background:'
+        f'{tint};border-radius:12px">'
+        f'<span style="display:inline-block;background:{color};color:#ffffff;border-radius:999px;'
+        'padding:0.12rem 0.48rem;font-size:0.68rem;font-weight:700;letter-spacing:0.04em">MCP</span>'
+        f'<span style="font-weight:700;font-size:0.95rem;color:{color};margin-left:0.5rem">{name}</span>'
+        f'<span style="font-weight:600;color:#475569;font-size:0.78rem;margin-left:0.45rem">{html.escape(count)}</span>'
+        "</summary>"
+        f'<div style="padding:0.55rem 0.8rem 0.35rem">{inner}</div>'
+        "</details>"
+    )
+
+
+def _mcp_servers_html(servers, batches) -> str:
+    """Colored MCP server rows. Open one row to read its tools.
+
+    A ``<select>`` cannot swap panels here. Jupyter disables every ``<input>`` and
+    strips ``<script>`` from untrusted HTML, so ``<details>`` is the control that
+    still opens. See the JupyterLab sanitizer:
+    https://github.com/jupyterlab/jupyterlab/blob/main/packages/apputils/src/sanitizer.ts
+    """
+    cards = []
+    for index, (server, batch) in enumerate(zip(servers, batches)):
+        color = _SERVER_COLORS[index % len(_SERVER_COLORS)]
+        cards.append(_server_html(server, batch, color))
+    body = "".join(cards) or '<p style="margin:0;color:#64748b">No registry servers are enabled.</p>'
+    return (
+        "<style>"
+        ".mcp-registry summary::-webkit-details-marker{display:none}"
+        ".mcp-registry summary{list-style:none}"
+        ".mcp-registry details[open]>summary{border-radius:12px 12px 0 0}"
+        "</style>"
+        '<div class="mcp-registry" style="font-family:ui-sans-serif,system-ui,sans-serif;background:#ffffff;color:#1e293b;'
+        'border-radius:12px;padding:0.9rem 1.1rem 1rem;margin:0.4rem 0 0.8rem;border:1px solid #e2e8f0">'
+        '<div style="font-size:1.02rem;font-weight:700">Registry</div>'
+        '<p style="margin:0.2rem 0 0.75rem;font-size:0.8rem;color:#64748b">'
+        "Select an MCP server. Its tools open under that name. "
+        "The server name is what you pass to <code>create_agent</code>.</p>"
+        f"{body}</div>"
+    )
+
+
+def _print_mcp_index(servers, batches) -> None:
+    print(f"{len(servers)} MCP servers")
+    for server, batch in zip(servers, batches):
+        name = server.get("name") or ""
+        if isinstance(batch, Exception):
+            print(f"- {name}: tools unavailable ({batch})")
+            continue
+        names = ", ".join(tool.name for tool in batch)
+        print(f"- {name}: {names or 'no tools'}")
 
 
 def _require_unique_tool_names(tools_by_server: dict[str, list]) -> None:
@@ -122,7 +253,7 @@ def _require_unique_tool_names(tools_by_server: dict[str, list]) -> None:
 
 
 async def pretty_print_mcp_servers() -> None:
-    """List EVE's registry MCP servers and print each one with its tools.
+    """Show EVE's registry MCP servers. In a notebook, select a server to read its tools.
 
     The server name is what you pass in the ``create_agent`` list (``\"effis\"``, ``\"serpapi\"``).
     """
@@ -135,26 +266,17 @@ async def pretty_print_mcp_servers() -> None:
             return await client.list_tools()
 
     batches = await asyncio.gather(*(_tools(server["name"]) for server in servers), return_exceptions=True)
-
-    print("=" * 80)
-    print(f"{'MCP SERVERS AND TOOLS':^80}")
-    print("=" * 80)
-    print(f"\nTotal servers: {len(servers)}\n")
-    for server, batch in zip(servers, batches):
-        print(f"\n{'─' * 80}")
-        print(server["name"])
-        print(f"{'─' * 80}")
-        if server.get("description"):
-            print("\nDescription:")
-            for line in server["description"].strip().split("\n"):
-                print(f"   {line}")
-        if isinstance(batch, Exception):
-            print(f"\n   Tools unavailable: {batch}")
-            continue
-        print(f"\nTools: {len(batch)}")
-        for index, tool in enumerate(batch, 1):
-            _print_tool(tool, index)
-    print(f"\n{'=' * 80}\n")
+    page = _mcp_servers_html(servers, batches)
+    try:
+        from IPython import get_ipython
+        from IPython.display import HTML, display
+    except ImportError:
+        _print_mcp_index(servers, batches)
+        return
+    if get_ipython() is None:
+        _print_mcp_index(servers, batches)
+        return
+    display(HTML(page))
 
 
 async def call_tool(client: Client, tool: str, **arguments):

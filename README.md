@@ -8,7 +8,7 @@ The awards are sponsored and distributed by the [ESA Φ-lab Challenges Programme
 
 The day is one Earth Observation question the agent cannot answer yet. You build the missing [MCP](https://modelcontextprotocol.io/) server, test it against the live agent, and open a pull request to the [EVE MCP tool registry](https://github.com/eve-esa/mcp-tool-registry) so the same tool can be called from more than one client.
 
-The programme, the worked example, delivery, and how to open that pull request are in `[START_HERE.ipynb](START_HERE.ipynb)`. This page is the map of the repository.
+The programme, the worked example, delivery, and how to open that pull request are in [`START_HERE.ipynb`](START_HERE.ipynb). This page is the map of the repository.
 
 ## What's inside
 
@@ -27,7 +27,7 @@ The programme, the worked example, delivery, and how to open that pull request a
 
 ## Where you work
 
-You can do the whole day in the lab. Scan the QR code on the screen or on your table, enter the email you registered with, then the one-time code from that inbox. You land in a SageMaker JupyterLab space with this kit open, the **Agentic EO** kernel (Python 3.12), and GPUs on the instance. Open `[START_HERE.ipynb](START_HERE.ipynb)` and run it there. Your EVE API key is already in `.env` as `EVE_API_KEY`.
+You can do the whole day in the lab. Scan the QR code on the screen or on your table, enter the email you registered with, then the one-time code from that inbox. You land in a SageMaker JupyterLab space with this kit open, the **Agentic EO** kernel (Python 3.12), and GPUs on the instance. Open [`START_HERE.ipynb`](START_HERE.ipynb) and run it there. Your EVE API key is already in `.env` as `EVE_API_KEY`.
 
 No code? Ask the help desk for a spare account.
 
